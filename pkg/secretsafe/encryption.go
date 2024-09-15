@@ -1,62 +1,54 @@
 package secretsafe
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/hex"
-	"io"
+    "crypto/aes"
+    "crypto/cipher"
+    "crypto/rand"
+    "encoding/hex"
+    "io"
 )
 
-// Encrypt encrypts a secret using AES-256 GCM
+// Encrypt encrypts a value using AES encryption
 func Encrypt(value string) (string, error) {
-	key := []byte("a very very very very secret key") // 32 bytes for AES-256
+    key := []byte("your-32-byte-long-key-for-aes") // Replace with your actual key
+    plaintext := []byte(value)
 
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
+    block, err := aes.NewCipher(key)
+    if err != nil {
+        return "", err
+    }
 
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
+    ciphertext := make([]byte, aes.BlockSize+len(plaintext))
+    iv := ciphertext[:aes.BlockSize]
+    if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+        return "", err
+    }
 
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
+    stream := cipher.NewCFBEncrypter(block, iv)
+    stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
 
-	ciphertext := gcm.Seal(nonce, nonce, []byte(value), nil)
-	return hex.EncodeToString(ciphertext), nil
+    return hex.EncodeToString(ciphertext), nil
 }
 
-// Decrypt decrypts an encrypted secret
-func Decrypt(encryptedValue string) (string, error) {
-	key := []byte("a very very very very secret key") // 32 bytes for AES-256
+// Decrypt decrypts an AES-encrypted value
+func Decrypt(encrypted string) (string, error) {
+    key := []byte("your-32-byte-long-key-for-aes") // Replace with your actual key
+    ciphertext, _ := hex.DecodeString(encrypted)
 
-	data, err := hex.DecodeString(encryptedValue)
-	if err != nil {
-		return "", err
-	}
+    block, err := aes.NewCipher(key)
+    if err != nil {
+        return "", err
+    }
 
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
+    if len(ciphertext) < aes.BlockSize {
+        return "", err
+    }
 
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
+    iv := ciphertext[:aes.BlockSize]
+    ciphertext = ciphertext[aes.BlockSize:]
 
-	nonceSize := gcm.NonceSize()
-	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+    stream := cipher.NewCFBDecrypter(block, iv)
+    stream.XORKeyStream(ciphertext, ciphertext)
 
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return string(plaintext), nil
+    return string(ciphertext), nil
 }
