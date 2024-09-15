@@ -8,9 +8,8 @@ import (
     "io"
 )
 
-// Encrypt encrypts a value using AES encryption
 func Encrypt(value string) (string, error) {
-    key := []byte("your-32-byte-long-key-for-aes") // Replace with your actual key
+    key := []byte("gsjgfjshwh*1!jdbsvjbfsf") 
     plaintext := []byte(value)
 
     block, err := aes.NewCipher(key)
