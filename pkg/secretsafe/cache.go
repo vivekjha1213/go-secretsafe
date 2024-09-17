@@ -1,59 +1,55 @@
+// pkg/secretsafe/cache.go
+
 package secretsafe
 
 import (
 	"sync"
-	"time"
 )
 
-type Cache struct {
-	secrets map[string]cacheEntry
-	mu      sync.RWMutex
+type Cache interface {
+	Set(namespace, key, value string)
+	Get(namespace, key string) (string, bool)
+	Delete(namespace, key string)
 }
 
-type cacheEntry struct {
-	value   string
-	expires time.Time
+type InMemoryCache struct {
+	data map[string]map[string]string
+	mu   sync.RWMutex
 }
 
-// NewCache initializes a new Cache
-func NewCache() *Cache {
-	return &Cache{
-		secrets: make(map[string]cacheEntry),
+func NewCache() Cache {
+	return &InMemoryCache{
+		data: make(map[string]map[string]string),
 	}
 }
 
-// SetCache stores a secret in cache with an expiration
-func (c *Cache) SetCache(namespace, key, value string, ttl time.Duration) {
+func (c *InMemoryCache) Set(namespace, key, value string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	cacheKey := namespace + ":" + key
-	c.secrets[cacheKey] = cacheEntry{
-		value:   value,
-		expires: time.Now().Add(ttl),
+	if _, ok := c.data[namespace]; !ok {
+		c.data[namespace] = make(map[string]string)
 	}
+	c.data[namespace][key] = value
 }
 
-// GetCache retrieves a secret from cache if it's still valid
-func (c *Cache) GetCache(namespace, key string) (string, bool) {
+func (c *InMemoryCache) Get(namespace, key string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	cacheKey := namespace + ":" + key
-	entry, exists := c.secrets[cacheKey]
-
-	if !exists || time.Now().After(entry.expires) {
-		return "", false
+	if ns, ok := c.data[namespace]; ok {
+		if value, ok := ns[key]; ok {
+			return value, true
+		}
 	}
-
-	return entry.value, true
+	return "", false
 }
 
-// DeleteCache removes a secret from the cache
-func (c *Cache) DeleteCache(namespace, key string) {
+func (c *InMemoryCache) Delete(namespace, key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	cacheKey := namespace + ":" + key
-	delete(c.secrets, cacheKey)
+	if ns, ok := c.data[namespace]; ok {
+		delete(ns, key)
+	}
 }

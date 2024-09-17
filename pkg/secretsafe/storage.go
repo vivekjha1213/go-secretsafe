@@ -1,88 +1,125 @@
+// pkg/secretsafe/storage.go
+
 package secretsafe
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
-type Storage struct {
-	filePath string
+// Define a custom error for "key not found"
+var ErrKeyNotFound = fmt.Errorf("key not found")
+
+type Storage interface {
+	Set(namespace, key, value string) error
+	Get(namespace, key string) (string, error)
+	Delete(namespace, key string) error
 }
 
-// NewStorage initializes storage
-func NewStorage(path string) (*Storage, error) {
+type FileStorage struct {
+	path string
+	mu   sync.RWMutex
+}
+
+func NewStorage(path string) (Storage, error) {
 	if path == "" {
-		path = filepath.Join(os.Getenv("HOME"), ".secretsafe")
+		path = filepath.Join(os.TempDir(), "secretsafe")
 	}
-	if err := os.MkdirAll(path, 0700); err != nil {
-		return nil, err
+
+	err := os.MkdirAll(path, 0700)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage directory: %w", err)
 	}
-	return &Storage{filePath: filepath.Join(path, "secrets.json")}, nil
+
+	return &FileStorage{path: path}, nil
 }
 
-// Save stores a secret
-func (s *Storage) Save(namespace, key, value string) error {
-	secrets, err := s.loadSecrets()
+func (fs *FileStorage) Set(namespace, key, value string) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	data := make(map[string]string)
+	filePath := fs.getFilePath(namespace)
+
+	// Read existing data
+	if fileContent, err := os.ReadFile(filePath); err == nil {
+		json.Unmarshal(fileContent, &data)
+	}
+
+	// Update data
+	data[key] = value
+
+	// Write updated data
+	fileContent, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal data: %w", err)
 	}
 
-	if secrets[namespace] == nil {
-		secrets[namespace] = make(map[string]string)
+	err = os.WriteFile(filePath, fileContent, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
 	}
-	secrets[namespace][key] = value
 
-	return s.saveSecrets(secrets)
+	return nil
 }
 
-// Load retrieves a secret
-func (s *Storage) Load(namespace, key string) (string, error) {
-	secrets, err := s.loadSecrets()
+func (fs *FileStorage) Get(namespace, key string) (string, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+
+	data := make(map[string]string)
+	filePath := fs.getFilePath(namespace)
+
+	fileContent, err := os.ReadFile(filePath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read file: %w", err)
 	}
 
-	if val, exists := secrets[namespace][key]; exists {
-		return val, nil
+	err = json.Unmarshal(fileContent, &data)
+	if err != nil {
+		return "", fmt.Errorf("failed to unmarshal data: %w", err)
 	}
 
-	return "", errors.New("secret not found")
+	value, ok := data[key]
+	if !ok {
+		return "", ErrKeyNotFound // Use the custom error
+	}
+
+	return value, nil
 }
 
-// Delete removes a secret
-func (s *Storage) Delete(namespace, key string) error {
-	secrets, err := s.loadSecrets()
-	if err != nil {
-		return err
+func (fs *FileStorage) Delete(namespace, key string) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	data := make(map[string]string)
+	filePath := fs.getFilePath(namespace)
+
+	// Read existing data
+	if fileContent, err := os.ReadFile(filePath); err == nil {
+		json.Unmarshal(fileContent, &data)
 	}
 
-	delete(secrets[namespace], key)
-	return s.saveSecrets(secrets)
+	// Delete key
+	delete(data, key)
+
+	// Write updated data
+	fileContent, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
+	}
+
+	err = os.WriteFile(filePath, fileContent, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
 }
 
-// Helper functions to read/write from the file
-func (s *Storage) loadSecrets() (map[string]map[string]string, error) {
-	file, err := os.ReadFile(s.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return make(map[string]map[string]string), nil
-		}
-		return nil, err
-	}
-
-	var secrets map[string]map[string]string
-	if err := json.Unmarshal(file, &secrets); err != nil {
-		return nil, err
-	}
-	return secrets, nil
-}
-
-func (s *Storage) saveSecrets(secrets map[string]map[string]string) error {
-	fileData, err := json.MarshalIndent(secrets, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.filePath, fileData, 0600)
+func (fs *FileStorage) getFilePath(namespace string) string {
+	return filepath.Join(fs.path, namespace+".json")
 }

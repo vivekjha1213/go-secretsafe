@@ -1,109 +1,76 @@
-package secretsafe
+// tests/manager_test.go
+
+package tests
 
 import (
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
+	"github.com/vivekjha1213/go-secretsafe/pkg/secretsafe"
 )
 
-// MockStorage is a mock implementation of the Storage interface
 type MockStorage struct {
-	mock.Mock
+	data map[string]map[string]string
 }
 
-func (m *MockStorage) Save(namespace, key, value string) error {
-	args := m.Called(namespace, key, value)
-	return args.Error(0)
+func NewMockStorage() *MockStorage {
+	return &MockStorage{
+		data: make(map[string]map[string]string),
+	}
 }
 
-func (m *MockStorage) Load(namespace, key string) (string, error) {
-	args := m.Called(namespace, key)
-	return args.String(0), args.Error(1)
+func (m *MockStorage) Set(namespace, key, value string) error {
+	if _, ok := m.data[namespace]; !ok {
+		m.data[namespace] = make(map[string]string)
+	}
+	m.data[namespace][key] = value
+	return nil
+}
+
+func (m *MockStorage) Get(namespace, key string) (string, error) {
+	if ns, ok := m.data[namespace]; ok {
+		if value, ok := ns[key]; ok {
+			return value, nil
+		}
+	}
+	return "", secretsafe.ErrKeyNotFound
 }
 
 func (m *MockStorage) Delete(namespace, key string) error {
-	args := m.Called(namespace, key)
-	return args.Error(0)
-}
-
-// MockCache is a mock implementation of the Cache interface
-type MockCache struct {
-	mock.Mock
-}
-
-func (m *MockCache) SetCache(namespace, key, value string, duration time.Duration) {
-	m.Called(namespace, key, value, duration)
-}
-
-func (m *MockCache) GetCache(namespace, key string) (string, bool) {
-	args := m.Called(namespace, key)
-	return args.String(0), args.Bool(1)
-}
-
-func (m *MockCache) DeleteCache(namespace, key string) {
-	m.Called(namespace, key)
-}
-
-func TestSetSecret(t *testing.T) {
-	storage := new(MockStorage)
-	cache := new(MockCache)
-	sm := NewSecretManager(storage, cache)
-
-	// Setup expectations
-	storage.On("Save", "namespace1", "key1", mock.Anything).Return(nil)
-	cache.On("SetCache", "namespace1", "key1", "value1", 5*time.Minute).Return()
-
-	// Call the method
-	err := sm.SetSecret("namespace1", "key1", "value1")
-
-	// Assert expectations
-	assert.NoError(t, err)
-	storage.AssertExpectations(t)
-	cache.AssertExpectations(t)
-}
-
-func TestGetSecret(t *testing.T) {
-	storage := new(MockStorage)
-	cache := new(MockCache)
-	sm := NewSecretManager(storage, cache)
-
-	// Setup expectations
-	cache.On("GetCache", "namespace1", "key1").Return("", false)
-	storage.On("Load", "namespace1", "key1").Return("encryptedValue", nil)
-	Encrypt = func(value string) (string, error) {
-		return value, nil
+	if ns, ok := m.data[namespace]; ok {
+		delete(ns, key)
 	}
-	Decrypt = func(encrypted string) (string, error) {
-		return encrypted, nil
-	}
-	cache.On("SetCache", "namespace1", "key1", "value1", 5*time.Minute).Return()
-
-	// Call the method
-	value, err := sm.GetSecret("namespace1", "key1")
-
-	// Assert expectations
-	assert.NoError(t, err)
-	assert.Equal(t, "value1", value)
-	storage.AssertExpectations(t)
-	cache.AssertExpectations(t)
+	return nil
 }
 
-func TestDeleteSecret(t *testing.T) {
-	storage := new(MockStorage)
-	cache := new(MockCache)
-	sm := NewSecretManager(storage, cache)
+func TestSecretManager(t *testing.T) {
+	storage := NewMockStorage()
+	cache := secretsafe.NewCache()
+	manager := secretsafe.NewSecretManager(storage, cache)
 
-	// Setup expectations
-	storage.On("Delete", "namespace1", "key1").Return(nil)
-	cache.On("DeleteCache", "namespace1", "key1").Return()
+	// Test SetSecret
+	err := manager.SetSecret("test", "key1", "value1")
+	if err != nil {
+		t.Errorf("SetSecret failed: %v", err)
+	}
 
-	// Call the method
-	err := sm.DeleteSecret("namespace1", "key1")
+	// Test GetSecret
+	value, err := manager.GetSecret("test", "key1")
+	if err != nil {
+		t.Errorf("GetSecret failed: %v", err)
+	}
+	if value != "value1" {
+		t.Errorf("Expected value1, got %s", value)
+	}
 
-	// Assert expectations
-	assert.NoError(t, err)
-	storage.AssertExpectations(t)
-	cache.AssertExpectations(t)
+	// Test DeleteSecret
+	err = manager.DeleteSecret("test", "key1")
+	if err != nil {
+		t.Errorf("DeleteSecret failed: %v", err)
+	}
+
+	// Verify deletion
+	_, err = manager.GetSecret("test", "key1")
+	if err != secretsafe.ErrKeyNotFound {
+		t.Errorf("Expected ErrKeyNotFound after deletion, got %v", err)
+	}
 }

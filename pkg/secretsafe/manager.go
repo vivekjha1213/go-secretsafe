@@ -1,67 +1,66 @@
+// pkg/secretsafe/manager.go
+
 package secretsafe
 
 import (
-    "fmt"
-    "time"
+	"sync"
 )
 
 type SecretManager struct {
-    storage *Storage
-    cache   *Cache
+	storage Storage
+	cache   Cache
+	mu      sync.RWMutex
 }
 
-// NewSecretManager creates a new SecretManager instance
-func NewSecretManager(storage *Storage, cache *Cache) *SecretManager {
-    return &SecretManager{
-        storage: storage,
-        cache:   cache,
-    }
+func NewSecretManager(storage Storage, cache Cache) *SecretManager {
+	return &SecretManager{
+		storage: storage,
+		cache:   cache,
+	}
 }
 
-// SetSecret stores a secret securely
 func (sm *SecretManager) SetSecret(namespace, key, value string) error {
-    encryptedValue, err := Encrypt(value) // Ensure Encrypt is imported from encryption.go
-    if err != nil {
-        return fmt.Errorf("failed to encrypt secret: %w", err)
-    }
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
-    if err := sm.storage.Save(namespace, key, encryptedValue); err != nil {
-        return fmt.Errorf("failed to store secret: %w", err)
-    }
+	err := sm.storage.Set(namespace, key, value)
+	if err != nil {
+		return err
+	}
 
-    sm.cache.SetCache(namespace, key, value, 5*time.Minute)
-    return nil
+	sm.cache.Set(namespace, key, value)
+	return nil
 }
 
-// GetSecret retrieves a secret securely
 func (sm *SecretManager) GetSecret(namespace, key string) (string, error) {
-    // Check the cache first
-    if value, found := sm.cache.GetCache(namespace, key); found {
-        return value, nil
-    }
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 
-    // If not found in cache, retrieve from storage
-    encryptedValue, err := sm.storage.Load(namespace, key)
-    if err != nil {
-        return "", fmt.Errorf("failed to load secret: %w", err)
-    }
+	// Try to get from cache first
+	if value, found := sm.cache.Get(namespace, key); found {
+		return value, nil
+	}
 
-    // Decrypt the secret
-    value, err := Decrypt(encryptedValue) // Ensure Decrypt is imported from encryption.go
-    if err != nil {
-        return "", fmt.Errorf("failed to decrypt secret: %w", err)
-    }
+	// If not in cache, get from storage
+	value, err := sm.storage.Get(namespace, key)
+	if err != nil {
+		return "", err
+	}
 
-    // Store in cache
-    sm.cache.SetCache(namespace, key, value, 5*time.Minute)
-    return value, nil
+	// Update cache
+	sm.cache.Set(namespace, key, value)
+	return value, nil
 }
 
-// DeleteSecret removes a secret
 func (sm *SecretManager) DeleteSecret(namespace, key string) error {
-    if err := sm.storage.Delete(namespace, key); err != nil {
-        return fmt.Errorf("failed to delete secret: %w", err)
-    }
-    sm.cache.DeleteCache(namespace, key)
-    return nil
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	err := sm.storage.Delete(namespace, key)
+	if err != nil {
+		return err
+	}
+
+	sm.cache.Delete(namespace, key)
+	return nil
 }
